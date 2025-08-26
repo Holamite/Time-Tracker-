@@ -1,5 +1,5 @@
-use error_stack::Result;
-use track::{ errors::AppError, init };
+use error_stack::{ Result, ResultExt };
+use track::{ errors::AppError, feature::cli, init };
 
 // Application Entry Point
 // ===============================================
@@ -10,6 +10,7 @@ use track::{ errors::AppError, init };
 fn main() -> Result<(), AppError> {
     init::error_reporter();
     init::tracing();
+    cli::run().change_context(AppError).attach_printable("Failed to run CLI")?;
 
     Ok(())
 }
