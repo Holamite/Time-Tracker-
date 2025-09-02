@@ -1,6 +1,9 @@
-use std::{ fs::{ remove_file, OpenOptions }, path::PathBuf };
+use std::{ fs::{ remove_file, OpenOptions }, io::{ BufWriter, Write }, path::PathBuf };
 
 use error_stack::{ Result, ResultExt };
+
+use crate::feature::tracking::{ StartTime, TimeRecord };
+// use super::TimeRecord;
 
 #[derive(Debug, thiserror::Error)]
 #[error("a flatfile tracking error has occurred")]
@@ -23,12 +26,22 @@ impl FlatfileTracker {
     }
 
     fn start(&self) -> Result<(), FlatfileError> {
-        OpenOptions::new()
+        // Save the current start time into the lock file
+        let file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&self.lock_file)
             .change_context(FlatfileError)
             .attach_printable("Failed to create lock file")?;
+
+        let mut writer = BufWriter::new(file);
+
+        writer
+            .write_all(StartTime::now().to_string().as_bytes())
+            .change_context(FlatfileError)
+            .attach_printable("Failed to write start time to lock file")?;
+
+        writer.flush().change_context(FlatfileError).attach_printable("Failed to flush lock file")?;
         Ok(())
     }
 
@@ -37,10 +50,20 @@ impl FlatfileTracker {
     }
 
     fn stop(&self) -> Result<(), FlatfileError> {
+        // 1. Read the time from the lock file and create a TimeRecord
+        // 2. Get end time (EndTime::now())
+        // 3. Create a TimeRecord
+        // 5. Save the TimeRecord to the db (append to JSON file)
         remove_file(&self.lock_file)
             .change_context(FlatfileError)
             .attach_printable("Failed to remove lock file")?;
         Ok(())
+    }
+
+    fn record(&self) -> Result<impl Iterator<Item = TimeRecord>, FlatfileError> {
+        // Placeholder implementation
+        Ok(vec![].into_iter())
+        // Load records from the db (JSON file) and return an iterator
     }
 }
 
@@ -79,5 +102,19 @@ mod tests {
         tracker.stop().unwrap();
         // Then it should return false
         assert!(!tracker.is_running());
+    }
+
+    #[test]
+    fn time_record_created_when_tracking_stops() {
+        // Create a temporary directory for testing
+        let (_tempDir, db, lock_file) = temp_dir();
+        // Given a default tracker has a temporary db and lock file
+        let tracker = FlatfileTracker::new(db.to_path_buf(), &lock_file.to_path_buf());
+        tracker.start().unwrap();
+        // When starting tracking
+        tracker.stop().unwrap();
+
+        // Then record should be created
+        assert!(tracker.record().unwrap().next().is_some());
     }
 }
