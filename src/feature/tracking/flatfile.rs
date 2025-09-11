@@ -3,6 +3,7 @@ use std::{
     io::{ BufWriter, Write },
     path::PathBuf,
 };
+use serde::{ Deserialize, Serialize };
 
 use error_stack::{ Result, ResultExt };
 
@@ -18,6 +19,11 @@ struct FlatfileTracker {
     lock_file: PathBuf,
 }
 
+#[derive(Serialize, Deserialize)]
+struct LockFileData {
+    start_time: StartTime,
+}
+
 impl FlatfileTracker {
     fn new<D, L>(db: D, lock_file: L) -> Self where D: Into<PathBuf>, L: Into<PathBuf> {
         let db = db.into();
@@ -31,21 +37,37 @@ impl FlatfileTracker {
 
     fn start(&self) -> Result<(), FlatfileError> {
         // Save the current start time into the lock file
-        let file = OpenOptions::new()
+        let Lockfile_data = {
+            let start_time = StartTime::now();
+
+            let data = LockFileData {
+                start_time,
+            };
+
+            serde_json
+                ::to_string(&data)
+                .change_context(FlatfileError)
+                .attach_printable("Failed to serialize lock file data")?
+        };
+
+        OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&self.lock_file)
             .change_context(FlatfileError)
-            .attach_printable("Failed to create lock file")?;
-
-        let mut writer = BufWriter::new(file);
-
-        writer
-            .write_all(StartTime::now().to_string().as_bytes())
+            .attach_printable("Failed to create lock file")?
+            .write_all(Lockfile_data.as_bytes())
             .change_context(FlatfileError)
             .attach_printable("Failed to write start time to lock file")?;
 
-        writer.flush().change_context(FlatfileError).attach_printable("Failed to flush lock file")?;
+        // // let mut writer = BufWriter::new(file);
+
+        // writer
+        //     .write(StartTime::now().to_string().as_bytes())
+        //     .change_context(FlatfileError)
+        //     .attach_printable("Failed to write start time to lock file")?;
+
+        // writer.flush().change_context(FlatfileError).attach_printable("Failed to flush lock file")?;
         Ok(())
     }
 
@@ -73,21 +95,33 @@ impl FlatfileTracker {
             end: _end_time,
         };
 
-        // 5. Save the TimeRecord to the db (append to JSON file)
-        let file = OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(&self.db)
-            .change_context(FlatfileError)
-            .attach_printable("Failed to open db file")?;
+        // 4. Ensure the db file exists (create if not)
+        if !self.db.exists() {
+            OpenOptions::new()
+                .write(true)
+                .create(true)
+                .open(&self.db)
+                .change_context(FlatfileError)
+                .attach_printable("Failed to create db file")?;
+        } else {
+            // 5. Save the TimeRecord to the db (append to JSON file)
+            let file = OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(&self.db)
+                .change_context(FlatfileError)
+                .attach_printable("Failed to open db file")?;
 
-        let mut writer = BufWriter::new(file);
-        writer
-            .write_all(serde_json::to_string(&_time_record).unwrap().as_bytes())
-            .change_context(FlatfileError)
-            .attach_printable("Failed to write time record to db file")?;
-        writer.flush().change_context(FlatfileError).attach_printable("Failed to flush db file")?;
-
+            let mut writer = BufWriter::new(file);
+            writer
+                .write_all(serde_json::to_string(&_time_record).unwrap().as_bytes())
+                .change_context(FlatfileError)
+                .attach_printable("Failed to write time record to db file")?;
+            writer
+                .flush()
+                .change_context(FlatfileError)
+                .attach_printable("Failed to flush db file")?;
+        }
         // 6. Remove the lock file
         remove_file(&self.lock_file)
             .change_context(FlatfileError)
@@ -96,9 +130,15 @@ impl FlatfileTracker {
     }
 
     fn record(&self) -> Result<impl Iterator<Item = TimeRecord>, FlatfileError> {
-        // Placeholder implementation
-        Ok(vec![].into_iter())
         // Load records from the db (JSON file) and return an iterator
+        let content = read_to_string(&self.db)
+            .change_context(FlatfileError)
+            .attach_printable("Failed to read db file")?;
+        let records = content
+            .lines()
+            .filter_map(|line| serde_json::from_str::<TimeRecord>(line).ok())
+            .collect::<Vec<_>>();
+        Ok(records.into_iter())
     }
 }
 
